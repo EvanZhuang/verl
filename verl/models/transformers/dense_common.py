@@ -38,6 +38,16 @@ _GRANITE_MODEL_TYPES = (
 _COHERE_MODEL_TYPES = ("cohere", "cohere2", "cohere2_moe", "cohere_compass_text")
 
 
+def _require_nonzero_scale(self, scale) -> float:
+    scale = float(scale)
+    if scale == 0.0:
+        raise ValueError(
+            f"Model {type(self).__name__} has a zero post-lm_head logit scale, which is not supported by "
+            "verl's generic fused-kernel forward. Set use_fused_kernels=False."
+        )
+    return scale
+
+
 def _logit_scale_factor(self) -> float:
     if getattr(self.lm_head, "bias", None) is not None:
         raise ValueError(
@@ -46,13 +56,16 @@ def _logit_scale_factor(self) -> float:
         )
     model_type = getattr(self.config, "model_type", None)
     if model_type in _GRANITE_MODEL_TYPES:
-        return 1.0 / float(self.config.logits_scaling)
+        return 1.0 / _require_nonzero_scale(self, self.config.logits_scaling)
     if model_type in _COHERE_MODEL_TYPES:
-        return float(getattr(self, "logit_scale", None) or self.config.logit_scale)
+        logit_scale = getattr(self, "logit_scale", None)
+        if logit_scale is None:
+            logit_scale = self.config.logit_scale
+        return _require_nonzero_scale(self, logit_scale)
     if model_type == "falcon_h1":
-        return float(self.model.lm_head_multiplier)
+        return _require_nonzero_scale(self, self.model.lm_head_multiplier)
     if model_type == "hyperclovax":
-        return float(self.config.logits_scaling)
+        return _require_nonzero_scale(self, self.config.logits_scaling)
     return 1.0
 
 

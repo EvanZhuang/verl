@@ -308,6 +308,7 @@ def test_adapter_falls_back_to_local_roll_when_shift_labels_absent(forward_fn):
     [
         ("granite", "config", "logits_scaling", 8.0, 0.125),
         ("cohere", "self", "logit_scale", 0.0625, 0.0625),
+        ("cohere", "config", "logit_scale", 0.0625, 0.0625),
         ("falcon_h1", "model", "lm_head_multiplier", 0.0390625, 0.0390625),
         ("hyperclovax", "config", "logits_scaling", 0.125, 0.125),
     ],
@@ -317,6 +318,8 @@ def test_dense_common_folds_post_lm_head_logit_scale(
 ):
     model = _make_fake_lm()
     model.config.model_type = model_type
+    if model_type == "cohere" and attr_target == "self":
+        model.config.logit_scale = 0.25
     target = model if attr_target == "self" else getattr(model, attr_target)
     setattr(target, attr_name, attr_val)
     input_ids = torch.tensor([[10, 20, 30, 40]], dtype=torch.long)
@@ -325,6 +328,34 @@ def test_dense_common_folds_post_lm_head_logit_scale(
         forward_fn(model, input_ids=input_ids, labels=None, temperature=0.7, return_dict=True)
 
     assert captured["temperature"] == pytest.approx(0.7 / expected_scale)
+
+
+@pytest.mark.parametrize(
+    "forward_fn",
+    [dense_common.forward_with_torch_backend, dense_common.forward_with_triton_backend],
+    ids=_adapter_id,
+)
+@pytest.mark.parametrize(
+    "model_type,attr_target,attr_name",
+    [
+        ("granite", "config", "logits_scaling"),
+        ("cohere", "self", "logit_scale"),
+        ("cohere", "config", "logit_scale"),
+        ("falcon_h1", "model", "lm_head_multiplier"),
+        ("hyperclovax", "config", "logits_scaling"),
+    ],
+)
+def test_dense_common_rejects_zero_post_lm_head_logit_scale(forward_fn, model_type, attr_target, attr_name):
+    model = _make_fake_lm()
+    model.config.model_type = model_type
+    if model_type == "cohere" and attr_target == "self":
+        model.config.logit_scale = 0.0625
+    target = model if attr_target == "self" else getattr(model, attr_target)
+    setattr(target, attr_name, 0.0)
+    input_ids = torch.tensor([[10, 20, 30, 40]], dtype=torch.long)
+
+    with _patch_fused_kernels(), pytest.raises(ValueError, match="zero post-lm_head logit scale"):
+        forward_fn(model, input_ids=input_ids, labels=None, temperature=1.0, return_dict=True)
 
 
 @pytest.mark.parametrize(
